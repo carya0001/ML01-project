@@ -1,0 +1,20 @@
+variable,group,role,type,unit,source,definition
+date,keys,identifier,date,,derived,First day of the month
+year,keys,predictor,numeric,year,derived,Calendar year (2016-2025)
+month,keys,predictor,categorical (12),,derived,Calendar month
+canton,keys,predictor,categorical (26),,BFS px-x-1003020000_102,Destination canton
+origin_country,keys,predictor,categorical (12),,BFS px-x-1003020000_102,Visitors' country of residence. GCC = sum of Bahrain + Qatar + Kuwait + Oman + Saudi Arabia + UAE
+origin_group,keys,predictor,binary,,derived,near = Germany / France / Italy / United Kingdom / Netherlands / Austria; far = United States / China / India / Japan / South Korea / GCC. Fully determined by origin_country (do not use both in one model)
+arrivals,demand,response,count,guests,BFS px-x-1003020000_102,Hotel arrivals. NA (97 cells) where the BFS hides small values
+overnights,demand,response,count,nights,BFS px-x-1003020000_102,Hotel overnight stays
+avg_stay,demand,response,continuous,nights per arrival,derived,overnights / arrivals; NA when arrivals = 0. Proxy for visitor value (no spending data)
+growth,demand,response (binary),binary,,derived,1 if arrivals are higher than in the same month of the previous year (2015 used for 2016); NA where the BFS hides a value
+beds,capacity,predictor,continuous,beds,BFS px-x-1003020000_202,Hotel beds available in open establishments in the canton and month
+bed_occupancy_lag12,capacity,predictor,continuous,%,BFS px-x-1003020000_202,Bed occupancy in the same canton and month one year earlier (2015 used for 2016)
+real_fx_index,exchange rate,predictor,continuous,index (2016 = 100),SNB devkum + FRED EXINUS + IMF WEO,CHF per unit of origin currency x (origin price index / Swiss price index). Higher = origin currency stronger in real terms = Switzerland cheaper. INR via USD cross rate; GCC uses USD (pegged currencies). Price indices are annual (IMF inflation)
+rel_income,purchasing power,predictor,continuous,ratio,IMF WEO PPPPC,Origin GDP per capita (PPP) / Swiss GDP per capita (PPP). GCC = population-weighted average
+gdp_growth_origin,purchasing power,predictor,continuous,%,IMF WEO NGDP_RPCH,Real GDP growth of the origin country in that year
+covid_stringency_origin,events,predictor,continuous,index 0-100,OxCGRT,Monthly mean COVID-19 stringency index in the origin country; 0 outside 2020-2022. GCC = population-weighted
+distance_km,origin features,predictor,continuous,km,CEPII GeoDist (dist_cepii),Distance between the main cities of Switzerland and the origin country; GCC = population-weighted mean of the six. Fixed per origin: use instead of origin_country (not together)
+population_origin_m,origin features,predictor,continuous,millions,IMF WEO (LP),Population of the origin country in that year; GCC = sum of the six
+visa_required,origin features,predictor,binary,,EU Regulation 2018/1806 (manual),1 if visitors need a Schengen visa: China / India / GCC (the UAE has been exempt since 2015; the other five Gulf countries are not). Fixed per origin: use instead of origin_country (not together)

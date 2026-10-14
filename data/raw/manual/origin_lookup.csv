@@ -1,0 +1,13 @@
+origin_country,iso3,visa_required,note
+Germany,DEU,0,
+France,FRA,0,
+Italy,ITA,0,
+United Kingdom,GBR,0,
+Netherlands,NLD,0,
+Austria,AUT,0,
+United States,USA,0,
+China,CHN,1,
+India,IND,1,
+Japan,JPN,0,
+South Korea,KOR,0,
+GCC,GCC,1,"Bahrain, Kuwait, Oman, Qatar and Saudi Arabia need a Schengen visa; the UAE has been exempt since Dec 2015"
