@@ -1,8 +1,9 @@
 # 01_get_bfs.R
 # Downloads the BFS hotel statistics (HESTA) through the PxWeb API.
-#   - px-x-1003020000_102: arrivals and overnight stays by year, month, canton and
+#   - px-x-1003020000_102: arrivals and overnight stays by year, canton and
 #                          visitors' country of residence (demand)
-#   - px-x-1003020000_202: supply and demand by year, month and canton (capacity)
+#   - px-x-1003020000_202: beds and bed occupancy by year and canton (capacity)
+# Yearly values are the BFS "Total of the year" (Monat = YYYY).
 # Output: data/raw/bfs_demand.csv, data/raw/bfs_supply.csv
 
 library(httr)
@@ -11,7 +12,7 @@ library(dplyr)
 library(readr)
 
 years   <- as.character(2015:2025)        # panel is 2016-2025; 2015 only for "vs. last year" columns
-months  <- as.character(1:12)
+months  <- "YYYY"                        # BFS "Total of the year"
 cantons <- c("8100", as.character(1:26))  # Switzerland total + 26 cantons
 
 # Origins: all-origins total, 11 markets, and the six Gulf countries summed into "GCC"
@@ -54,7 +55,7 @@ demand <- bind_rows(lapply(years, function(y) {
 write_csv(demand, "data/raw/bfs_demand.csv")
 message("demand: ", nrow(demand), " rows")
 
-# Supply: beds (3) and bed occupancy in % (8)
+# Supply: beds (3, yearly average) and bed occupancy in % (8)
 supply <- bind_rows(lapply(years, function(y) {
   Sys.sleep(1)
   query_pxweb("px-x-1003020000_202", list(
