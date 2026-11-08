@@ -1,0 +1,29 @@
+---
+title: "MPM02 Groupwork"
+output: html_document
+date: "2026-11-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Import
+
+```{r}
+library(readr)
+swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
+head(swiss_hotel_panel)
+```
+
+# Models
+
+## Linear Model 
+
+## Generalized Linear Model 
+
+Pick one of Binomial or Poisson
+
+## Support Vector Machine
+
+## Artificial Neural Network
