@@ -16,9 +16,13 @@ swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
 head(swiss_hotel_panel)
 ```
 
+## Data Exploration
+
 # Models
 
 ## Linear Model 
+
+## Non-Linear Model
 
 ## Generalized Linear Model 
 
