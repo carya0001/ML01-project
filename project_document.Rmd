@@ -8,11 +8,19 @@ date: "2026-11-08"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r include=FALSE}
+## packages
+library(readr)
+#library(ggplot)
+```
+
 ## Data Import
 
-```{r}
-library(readr)
+```{r results='hide', message=FALSE}
 swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
+```
+
+```{r}
 head(swiss_hotel_panel)
 ```
 
@@ -20,13 +28,28 @@ head(swiss_hotel_panel)
 
 # Models
 
-## Linear Model 
+## Linear Model
 
 ## Non-Linear Model
 
-## Generalized Linear Model 
+## Generalized Linear Model
 
-Pick one of Binomial or Poisson
+This section was lead by Benjamin Jud.\
+Using a Poisson Generalized Linear Model, we will examine count data on arrivals and overnights in xxx...\
+\
+First, lets examine the two columns:
+
+```{r}
+summary(swiss_hotel_panel[, c("arrivals", "overnights")])
+```
+
+From the summary call, we can see that both columns consist of integer values greater than 0. As such, we can model this count data using poisson and quasi-poisson models. We can also see that there is quite data is generally left skewed, with a long rightsided tail. As such, both `Arrivals` and `Overnights` will be log-transformed.
+
+```{r}
+par(mfrow = c(1, 2))
+hist(log(swiss_hotel_panel$arrivals), main = 'Histogram of Arrivals', xlab = 'Arrivals (log transformed)')
+hist(log(swiss_hotel_panel$overnights), main = 'Histogram of Overnights', xlab = 'Overnights (log transformed)')
+```
 
 ## Support Vector Machine
 
