@@ -28,8 +28,9 @@ str(hotel)                 # canton, origin_country, origin_group, covid_period 
 colSums(is.na(hotel))      # arrivals, overnights, share_in_canton: 2 NA (hidden by the BFS)
 
 hotel |> filter(is.na(arrivals)) |> select(year, canton, origin_country)
-# Appenzell Innerrhoden, GCC and South Korea, 2022: no response
-# we keep them until the lag is computed, then drop them
+# Appenzell Innerrhoden, GCC and South Korea, 2022: no response, so we drop them
+
+hotel <- hotel |> filter(!is.na(arrivals))
 
 # ---------------------------check response: arrivals--------------------------
 
@@ -43,17 +44,6 @@ sum(hotel$arrivals == 0, na.rm = TRUE)
 hotel <- hotel |> mutate(log_arrivals = log1p(arrivals))
 
 ggplot(hotel, aes(log_arrivals)) + geom_histogram(bins = 40)   # more symmetric
-
-# -----------------------transform response: arrivals--------------------------
-
-hotel <- hotel |>
-  group_by(canton, origin_country) |>
-  mutate(lag_log_arrivals = log1p(lag(arrivals))) |>
-  ungroup()
-
-# -----------------------------filter data-------------------------------------
-
-hotel <- hotel |> filter(!is.na(arrivals))
 
 # ----------------------------check predictors---------------------------------
 
