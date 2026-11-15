@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r include=FALSE}
 ## packages
 library(readr)
-#library(ggplot)
+library(ggplot2)
 ```
 
 ## Data Import
@@ -34,6 +34,8 @@ head(swiss_hotel_panel)
 
 ## Generalized Linear Model
 
+### POISSON \_ DELETE
+
 This section was lead by Benjamin Jud.\
 Using a Poisson Generalized Linear Model, we will examine count data on arrivals and overnights in xxx...\
 \
@@ -43,12 +45,92 @@ First, lets examine the two columns:
 summary(swiss_hotel_panel[, c("arrivals", "overnights")])
 ```
 
-From the summary call, we can see that both columns consist of integer values greater than 0. As such, we can model this count data using poisson and quasi-poisson models. We can also see that there is quite data is generally left skewed, with a long rightsided tail. As such, both `Arrivals` and `Overnights` will be log-transformed.
+From the summary call, we can see that both columns consist of integer values greater than 0. As such, we can model this count data using poisson and quasi-poisson models. We can also see that there is quite data is generally left skewed, with a long right-sided tail. As such, both `Arrivals` and `Overnights` will be log-transformed.
 
 ```{r}
 par(mfrow = c(1, 2))
 hist(log(swiss_hotel_panel$arrivals), main = 'Histogram of Arrivals', xlab = 'Arrivals (log transformed)')
 hist(log(swiss_hotel_panel$overnights), main = 'Histogram of Overnights', xlab = 'Overnights (log transformed)')
+```
+
+```{r}
+glm_arrivals = glm(arrivals ~ ., 
+                   data = swiss_hotel_panel,
+                   family = 'quasipoisson')
+summary(glm_arrivals)
+
+```
+
+### Binomial
+
+Using a Binomial Generalized Linear Model, we will attempt to model and predict growth from any specific market, based on xxx
+
+The following is an overview of grow, where `1` represents a year-over-year increase in hotel stays from that particular market, and `0` represents a decline in hotel stays.
+
+```{r}
+n_growth = tapply(swiss_hotel_panel$growth == 1, swiss_hotel_panel$year, sum, na.rm = TRUE)
+
+yoy_growth = as.numeric(n_growth) / as.numeric(table(swiss_hotel_panel$year))
+```
+
+```{r}
+years = as.numeric(colnames(tbl_growth))
+
+plot(years, yoy_growth, type = "b", pch = 16,
+     xlab = "Year", ylab = "Share with YoY growth",
+     main = "YoY Growth in Hotel Stays", xaxt = "n")
+axis(1, at = years)
+```
+
+First, we split our data into a training and testing set such that we can later run a prediction against the model, and validate our outcomes. We will be using a split of 70% (training) and 30% (testing).
+
+```{r}
+
+glm_sample_rows = sample.int(nrow(swiss_hotel_panel), floor(0.7 * nrow(swiss_hotel_panel)))
+
+glm_train_dataset <- swiss_hotel_panel[glm_sample_rows, ]   
+glm_test_dataset  <- swiss_hotel_panel[-glm_sample_rows, ]  
+```
+
+Now, we will construct a binomial GLM Model to find factors that contribute to this growth.
+
+```{r}
+##not sure how many vars you can include in one of these
+glm.growth = glm(growth ~ 
+                  gdp_growth_origin
+                 +real_fx_index
+                 +rel_income
+                 +visa_required
+                 +origin_group
+                 +year,
+                 data = glm_train_dataset,
+                 family = 'binomial')
+summary(glm.growth)
+```
+
+#### Predicting Growth from Origin Country GDP Growth
+
+```{r}
+glm.growth_origin = glm(growth~gdp_growth_origin, data = glm_train_dataset, family = 'binomial')
+plot(glm_train_dataset$gdp_growth_origin, glm_train_dataset$growth)
+```
+
+```{r}
+####### THIS GRAPH IS INCOMPLETE AND I HAVE NO IDEA WHAT IT REPRESENTS
+
+
+glm_origin_growth_predict <- predict(glm.growth_origin, glm_train_dataset, type = "link")
+b <- coef(glm.growth_origin)
+
+plot(glm_origin_growth_predict, 
+     as.numeric(glm_train_dataset$gdp_growth_origin), 
+     pch = 16, 
+     col = rgb(0, 0, 0, 0.3),
+     xlab = "GDP Growth Origin", 
+     ylab = "P(growth)")
+
+curve(plogis(b[1] + b[2] * x), 
+      add = TRUE, col = "red", lwd = 2)
 ```
 
 ## Support Vector Machine
