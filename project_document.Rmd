@@ -36,7 +36,7 @@ head(swiss_hotel_panel)
 
 This section was lead by Benjamin Jud.
 
-Using a Binomial Generalized Linear Model, we will attempt to model and predict growth from any specific country based market, with a focus on discovering the of impact economic metrics such as origin GDP growth, foreign exchange rates, relative income, and whether countries need visitor visas.
+Using a Binomial Generalized Linear Model, we will attempt to model and predict growth from any specific country based market, with a focus on discovering the of impact economic metrics such as origin GDP gowtrh, foreign exchange rates, relative income, whether countries need visitor visas, and whether grouping near or far makes a difference.
 
 The following is an overview of growth, where `1` represents a year-over-year increase in hotel stays from that particular country, and `0` represents a decline in hotel stays. To model this variable, we display the proportion of canton-origin market combinations which showed a year-over-year increase in growth.
 
@@ -69,7 +69,7 @@ glm_train_dataset <- swiss_hotel_panel[glm_sample_rows, ]
 glm_test_dataset  <- swiss_hotel_panel[-glm_sample_rows, ]  
 ```
 
-Now, we will construct a binomial GLM Model to find factors that contribute to this growth.
+Next, we will construct a binomial GLM Model to find factors that contribute to this growth.
 
 ```{r}
 ##not sure how many vars you can include in one of these
@@ -83,6 +83,33 @@ glm.growth = glm(growth ~
                  family = 'binomial')
 summary(glm.growth)
 ```
+
+Through the model summary call, four of five economic indicators (`gdp_growth_origin`, `real_fx_index`, `rel_income`, & `visa_required`) showed statistical significance.
+
+```{r echo=FALSE}
+
+coef_table = data.frame(
+  "Predictive_Variable" = colnames(glm.growth$model)[-1][-5],
+  Coefficient = coef(glm.growth)[-1][-5],
+  "Odds" = exp(coef(glm.growth)[-1][-5]),
+  "Odds_Percent_Increase" = (exp(coef(glm.growth)[-1][-5])-1) *100,
+  row.names   = NULL
+)
+coef_table
+
+```
+
+The `odds` column represents the exponentially transformed coefficient, where a single unit increase in the predictive variable creates an increase in the odds of hotels having growth from any particular origin market. `Odds_Percent_Increase` represents the percent increase on growth if the predictive value were to change.
+
+In this model, `rel_income` shows the odds by a significant margin, followed by `gpd_growth_origin`, while `real_fx_index` slightly reduces growth, and `visa_required` significantly reduces growth.
+
+```{r include=FALSE}
+## this block does not print in the knitted version, just for calculation & transparency
+indian_median = median(swiss_hotel_panel$rel_income[swiss_hotel_panel$origin_country == "India"])
+indian_median
+```
+
+Relative income, which is defined as any countries median income compared to the Swiss income (controlled for exchange rates and year), is an interesting factor to review in this model, as the countries selected in this analysis all have lower incomes than Switzerland. While certain developed nations have higher relative income, India has a relative income to Switzerland of just 9.28% (median) across the measured time period.
 
 #### Predicting Growth from Origin Country GDP Growth
 
