@@ -1,17 +1,31 @@
 ---
-title: "MPM02 Groupwork"
-output: html_document
-date: "2026-11-08"
+title: "Swiss hotel demand: where should a tourism agency spend?"
+author: "Benjamin Jud, Chaitanya Arya, Laura Cunha"
+output:
+  pdf_document:
+    toc: true
+    latex_engine: xelatex
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+date: "`r Sys.Date()`"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 
-```{r include=FALSE}
-## packages
 library(readr)
+library(dplyr)
+library(tidyr)    
 library(ggplot2)
+library(car)      
+library(mgcv)  
+
+theme_set(theme_minimal(base_size = 11) +
+          theme(plot.caption = element_text(hjust = 0.5)))
+
+group_cols <- c(near = "#0072B2", far = "#E69F00")
 ```
 
 ## Data Import
@@ -22,15 +36,282 @@ swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
 
 ```{r}
 head(swiss_hotel_panel)
+# Introduction
+
+
+
+## Data Import
+
+```{r data-import}
+swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
+head(swiss_hotel_panel, 3)
 ```
 
-## Data Exploration
+# Data Preparation
+
+```{r data-check-na}
+hotel <- read_csv("data/processed/swiss_hotel_panel.csv")
+hotel |> filter(is.na(arrivals)) |> select(year, canton, origin_country)
+hotel <- hotel |> filter(!is.na(arrivals))
+```
+
+```{r prep}
+hotel <- hotel |>
+  mutate(
+    canton         = factor(canton),
+    origin_country = factor(origin_country),
+    origin_group   = factor(origin_group, levels = c("near", "far")),
+    covid_period   = factor(covid_period, levels = c("pre", "during", "post"))
+  )
+```
+
+# Data Exploration
+
+## Response: arrivals
+```{r arrivals-raw, include=FALSE}
+ggplot(hotel, aes(arrivals)) + geom_histogram(bins = 40)
+```
+
+```{r arrivals-log, include=FALSE}
+hotel <- hotel |> mutate(log_arrivals = log1p(arrivals))
+ggplot(hotel, aes(log_arrivals)) + geom_histogram(bins = 40) 
+```
+
+## Continuous predictors
+```{r beds, include=FALSE}
+ggplot(hotel, aes(beds)) + geom_histogram(bins = 40)
+hotel <- hotel |> mutate(log_beds = log(beds))
+```
+
+```{r f, include=FALSE}
+ggplot(hotel, aes(real_fx_index)) + geom_histogram(bins = 40)
+```
+
+```{r income, include=FALSE}
+ggplot(hotel, aes(rel_income)) + geom_histogram(bins = 40)
+```
+
+```{r gdp, include=FALSE}
+ggplot(hotel, aes(gdp_growth_origin)) + geom_histogram(bins = 40)
+```
+
+## Origin markets
+```{r eda-origin}
+country_order <- hotel |>
+  group_by(origin_group, origin_country) |>
+  summarise(med = median(log_arrivals), .groups = "drop") |>
+  arrange(desc(origin_group), med) |>
+  pull(origin_country)
+
+hotel |>
+  mutate(origin_country = factor(origin_country, levels = country_order)) |>
+  ggplot(aes(log_arrivals, origin_country, fill = origin_group)) +
+  geom_boxplot(outlier.size = 1) +
+  scale_fill_manual(values = group_cols) +
+  labs(x = "log(arrivals)", y = NULL, fill = "Market")
+```
+
+## Cantons
+```{r eda-canton}
+hotel |>
+  group_by(canton, origin_group) |>
+  summarise(med = median(log_arrivals), .groups = "drop") |>
+  pivot_wider(names_from = origin_group, values_from = med) |>
+  mutate(canton = reorder(canton, near)) |>
+  ggplot(aes(y = canton)) +
+  geom_segment(aes(x = far, xend = near, yend = canton), colour = "grey50") +
+  geom_point(aes(x = near, colour = "near"), size = 2.5) +
+  geom_point(aes(x = far,  colour = "far"),  size = 2.5) +
+  scale_colour_manual(values = group_cols) +
+  labs(x = "Median log(arrivals) per market", y = NULL, colour = "Market")
+```
+
+## Year
+
+```{r eda-year}
+national <- hotel |>
+  group_by(year, origin_country, origin_group) |>
+  summarise(arrivals = sum(arrivals), .groups = "drop") |>
+  group_by(origin_country) |>
+  mutate(index = 100 * arrivals / arrivals[year == 2019]) |>
+  ungroup()
+
+ggplot(national, aes(year, index, group = origin_country, colour = origin_group)) +
+  geom_hline(yintercept = 100, linetype = 2, colour = "grey50") +
+  geom_line(alpha = 0.8) +
+  geom_point(size = 0.8) +
+  scale_colour_manual(values = group_cols) +
+  scale_x_continuous(breaks = 2016:2025) +
+  labs(x = NULL, y = "National arrivals (2019 = 100)", colour = "Market")
+```
+
+```{r eda-year-facet}
+ggplot(national, aes(year, index, colour = origin_group)) +
+  geom_hline(yintercept = 100, linetype = 2, colour = "grey50") +
+  geom_line() +
+  geom_point(size = 0.8) +
+  facet_wrap(~ origin_country) +
+  scale_colour_manual(values = group_cols) +
+  scale_x_continuous(breaks = 2020) +
+  labs(x = NULL, y = "National arrivals (2019 = 100)", colour = "Market")
+```
+
+## Exchange rate and hotel beds
+
+```{r eda-fx}
+ggplot(hotel, aes(real_fx_index, log_arrivals, colour = origin_group)) +
+  geom_point(alpha = 0.15, size = 0.7) +
+  geom_smooth(method = "gam", formula = y ~ s(x)) +
+  scale_colour_manual(values = group_cols) +
+  labs(x = "Real exchange-rate index (2016 = 100)", y = "log(arrivals)", colour = "Market")
+```
+
+```{r eda-beds}
+ggplot(hotel, aes(log_beds, log_arrivals, colour = origin_group)) +
+  geom_point(alpha = 0.15, size = 0.7) +
+  geom_smooth(method = "gam", formula = y ~ s(x)) +
+  scale_colour_manual(values = group_cols) +
+  labs(x = "log(hotel beds in canton)", y = "log(arrivals)", colour = "Market")
+```
+
+## Collinearity
+
+```{r vif}
+lm.vif <- lm(log_arrivals ~ canton + origin_country + year + real_fx_index +
+               log_beds + rel_income + gdp_growth_origin,
+             data = hotel)
+vif(lm.vif)
+```
 
 # Models
 
 ## Linear Model
 
-## Non-Linear Model
+## Non-Linear Model: GAM
+
+### Model building
+
+```{r gam-main}
+gam.main <- gam(log_arrivals ~ canton + origin_country +
+                  s(year, k = 10) + s(real_fx_index) + s(gdp_growth_origin),
+                data = hotel)
+```
+
+```{r gam-noint}
+gam.noint <- gam(
+  log_arrivals ~ canton + origin_group + origin_country +
+    s(year, by = origin_group, k = 10) +
+    s(real_fx_index, by = origin_group) +
+    s(gdp_growth_origin),
+  data = hotel
+)
+anova(gam.main, gam.noint, test = "F")
+```
+
+```{r gam-int}
+gam.int <- gam(
+  log_arrivals ~ canton * origin_group + origin_country +
+    s(year, by = origin_group, k = 10) +
+    s(real_fx_index, by = origin_group) +
+    s(gdp_growth_origin),
+  data = hotel
+)
+anova(gam.noint, gam.int, test = "F")
+```
+
+### Final model
+
+```{r gam-final}
+# smooth terms only; the full summary lists ~60 canton coefficients
+summary(gam.int)$s.table
+```
+
+```{r gam-smooths, fig.height = 7}
+par(mfrow = c(3, 2))
+plot(gam.int, select = 1, shade = TRUE)  # year, near
+plot(gam.int, select = 2, shade = TRUE)  # year, far
+plot(gam.int, select = 3, shade = TRUE)  # fx, near
+plot(gam.int, select = 4, shade = TRUE)  # fx, far
+plot(gam.int, select = 5, shade = TRUE)  # GDP growth
+```
+
+### Model checks
+
+```{r gam-check, fig.height = 6}
+par(mfrow = c(2, 2))
+gam.check(gam.int)
+```
+
+### Cross-validation
+
+```{r gam-cv, cache = TRUE}
+# linear model with the same structure as the final GAM (fair comparison)
+lm.equiv <- log_arrivals ~ canton * origin_group + origin_country +
+  factor(year) * origin_group + real_fx_index * origin_group +
+  gdp_growth_origin
+
+set.seed(10)
+n <- nrow(hotel)
+mse.gam.main  <- c()
+mse.gam.noint <- c()
+mse.gam.int   <- c()
+mse.lm.equiv  <- c()
+
+for (i in 1:20) {
+  # 1) prepare data: new random permutation each repetition
+  inds.permuted  <- sample(1:n, replace = FALSE)
+  hotel.permuted <- hotel[inds.permuted, ]
+  folds <- cut(1:n, breaks = 10, labels = FALSE)
+
+  mse.fold.main  <- c()
+  mse.fold.noint <- c()
+  mse.fold.int   <- c()
+  mse.fold.lm    <- c()
+
+  for (k in 1:10) {
+    ind.test    <- which(folds == k)
+    hotel.test  <- hotel.permuted[ind.test, ]
+    hotel.train <- hotel.permuted[-ind.test, ]
+
+    # 2) fit on train, 3) predict test, 4) compute MSE
+    fit  <- gam(formula(gam.main), data = hotel.train)
+    pred <- predict(fit, newdata = hotel.test)
+    mse.fold.main[k] <- mean((hotel.test$log_arrivals - pred)^2)
+
+    fit  <- gam(formula(gam.noint), data = hotel.train)
+    pred <- predict(fit, newdata = hotel.test)
+    mse.fold.noint[k] <- mean((hotel.test$log_arrivals - pred)^2)
+
+    fit  <- gam(formula(gam.int), data = hotel.train)
+    pred <- predict(fit, newdata = hotel.test)
+    mse.fold.int[k] <- mean((hotel.test$log_arrivals - pred)^2)
+
+    fit  <- lm(lm.equiv, data = hotel.train)
+    pred <- predict(fit, newdata = hotel.test)
+    mse.fold.lm[k] <- mean((hotel.test$log_arrivals - pred)^2)
+  }
+
+  # average over 10 folds
+  mse.gam.main[i]  <- mean(mse.fold.main)
+  mse.gam.noint[i] <- mean(mse.fold.noint)
+  mse.gam.int[i]   <- mean(mse.fold.int)
+  mse.lm.equiv[i]  <- mean(mse.fold.lm)
+}
+```
+
+```{r gam-cv-results}
+data.frame(
+  model    = c("GAM 1: main effects", "GAM 2: smooths by group",
+               "GAM 3: + interaction (final)", "LM, same structure"),
+  mean_MSE = c(mean(mse.gam.main), mean(mse.gam.noint),
+               mean(mse.gam.int), mean(mse.lm.equiv))
+) |>
+  knitr::kable(digits = 4)
+
+boxplot(mse.gam.main, mse.gam.noint, mse.gam.int, mse.lm.equiv,
+        names = c("GAM 1", "GAM 2", "GAM 3", "LM"),
+        ylab = "Test MSE")
+```
 
 ## Generalized Linear Model (Binomial)
 
