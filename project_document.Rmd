@@ -34,8 +34,6 @@ group_cols <- c(near = "#0072B2", far = "#E69F00")
 swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
 ```
 
-```{r}
-head(swiss_hotel_panel)
 # Introduction
 
 
