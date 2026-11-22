@@ -185,6 +185,133 @@ vif(lm.vif)
 
 ## Linear Model
 
+Chaitanya Arya took the lead on this method.
+
+The linear model is our reference model. It answers the question: how many more or fewer visitors does a canton get from a market, and how much of this is explained by time, the covid years, the exchange rate and the economy of the origin country? The response is `log_arrivals`, so each coefficient $b$ is read as a change of about $100 \cdot (e^{b} - 1)$ % in arrivals. Following the collinearity check, `log_beds` and `rel_income` are left out.
+
+### Model building
+
+We start with main effects only.
+
+```{r lm-main}
+lm.main <- lm(log_arrivals ~ canton + origin_country + year + covid_period +
+                real_fx_index + gdp_growth_origin,
+              data = hotel)
+
+drop1(lm.main, test = "F") |>
+  as.data.frame() |>
+  knitr::kable(digits = 3, caption = "LM 1: F-test for dropping each term")
+```
+
+Canton, origin market, year and the covid period are clearly needed (R² = `r round(summary(lm.main)$r.squared, 2)`). The exchange rate and GDP growth are not significant once the origin market is in the model: most of the differences in the exchange rate are between countries, and those are already captured by `origin_country`.
+
+The EDA showed that near and far markets reacted differently to covid and do not go to the same cantons. So in a second model we let the covid effect, the exchange-rate effect and the canton effect differ between near and far markets.
+
+```{r lm-int}
+lm.int <- lm(log_arrivals ~ canton + origin_country + year + covid_period +
+               real_fx_index + gdp_growth_origin +
+               origin_group:real_fx_index + origin_group:covid_period +
+               canton:origin_group,
+             data = hotel)
+
+anova(lm.main, lm.int) |>
+  as.data.frame() |>
+  knitr::kable(digits = 3, caption = "LM 1 vs LM 2 (with near/far interactions)")
+```
+
+The interactions improve the model a lot (R² goes up to `r round(summary(lm.int)$r.squared, 2)`), so LM 2 is our final linear model.
+
+### Interpretation
+
+```{r lm-effects}
+b <- coef(lm.int)
+V <- vcov(lm.int)
+
+# % change in arrivals with 95% CI; for far markets: main effect + interaction
+pct_effect <- function(terms) {
+  est <- sum(b[terms])
+  se  <- sqrt(sum(V[terms, terms]))
+  round(100 * (exp(est + c(-1.96, 0, 1.96) * se) - 1), 1)
+}
+
+effects <- rbind(
+  "Year (+1)"                  = pct_effect("year"),
+  "During covid, near markets" = pct_effect("covid_periodduring"),
+  "During covid, far markets"  = pct_effect(c("covid_periodduring", "covid_periodduring:origin_groupfar")),
+  "Post covid, near markets"   = pct_effect("covid_periodpost"),
+  "Post covid, far markets"    = pct_effect(c("covid_periodpost", "covid_periodpost:origin_groupfar")),
+  "FX index +1, near markets"  = pct_effect("real_fx_index"),
+  "FX index +1, far markets"   = pct_effect(c("real_fx_index", "real_fx_index:origin_groupfar")),
+  "GDP growth +1 pp"           = pct_effect("gdp_growth_origin")
+)
+colnames(effects) <- c("lower 95%", "% change", "upper 95%")
+knitr::kable(effects, caption = "LM 2: effects on arrivals in %")
+```
+
+- **Trend:** with everything else fixed, arrivals grow by about `r effects["Year (+1)", 2]` % per year.
+- **Covid:** in 2020-2021, near markets lost about two thirds of their arrivals, while far markets almost disappeared (`r effects["During covid, far markets", 2]` %). After covid (2022-2025), both are still below the pre-covid trend line, and far markets more so (`r effects["Post covid, far markets", 2]` % vs `r effects["Post covid, near markets", 2]` %). Because the yearly trend keeps adding about 11 % per year, this matches the EDA: near markets were back at their 2019 level by 2023, while far markets were still below it in 2024.
+- **Exchange rate and GDP:** a 1-point stronger origin currency (in real terms) does not significantly change arrivals for either group, and one extra percentage point of GDP growth adds only about `r effects["GDP growth +1 pp", 2]` %. Within a market, these yearly changes matter much less than covid and the long-term trend.
+
+The canton × origin group interaction shows where far markets go compared with near markets:
+
+```{r lm-canton, fig.height = 5}
+ci <- confint(lm.int)
+k  <- grep("^canton.*:origin_groupfar$", names(b))
+canton_far <- data.frame(
+  canton = sub("^canton(.*):origin_groupfar$", "\\1", names(b)[k]),
+  est    = 100 * (exp(b[k]) - 1),
+  lower  = 100 * (exp(ci[k, 1]) - 1),
+  upper  = 100 * (exp(ci[k, 2]) - 1)
+)
+
+ggplot(canton_far, aes(est, reorder(canton, est))) +
+  geom_vline(xintercept = 0, linetype = 2, colour = "grey50") +
+  geom_pointrange(aes(xmin = lower, xmax = upper), colour = group_cols["far"]) +
+  labs(x = "Extra % arrivals of far markets compared with near markets (vs Aargau)",
+       y = NULL)
+```
+
+Compared with the reference canton Aargau, far markets are strongly over-represented in Bern, Obwalden, Lucerne, Zurich and Geneva, which are the classic Jungfrau, Titlis/Lake Lucerne and city destinations. Far markets are under-represented in Jura, Thurgau and Glarus. For a tourism agency, this means that money aimed at far markets is best spent on the cantons that already attract them, while smaller cantons depend mostly on near markets.
+
+### Model checks
+
+```{r lm-check, fig.height = 6}
+par(mfrow = c(2, 2))
+plot(lm.int)
+```
+
+The residuals are centred around zero with fairly constant variance. The lower tail is heavier than normal. This comes mainly from the 25 rows with zero arrivals (small far markets in small cantons), which the log scale pulls far down.
+
+### Cross-validation
+
+```{r lm-cv, cache = TRUE}
+set.seed(10)
+n     <- nrow(hotel)
+folds <- sample(rep(1:10, length.out = n))
+
+rmse.lm.main <- c()
+rmse.lm.int  <- c()
+
+for (k in 1:10) {
+  hotel.train <- hotel[folds != k, ]
+  hotel.test  <- hotel[folds == k, ]
+
+  fit  <- lm(formula(lm.main), data = hotel.train)
+  pred <- predict(fit, newdata = hotel.test)
+  rmse.lm.main[k] <- sqrt(mean((hotel.test$log_arrivals - pred)^2))
+
+  fit  <- lm(formula(lm.int), data = hotel.train)
+  pred <- predict(fit, newdata = hotel.test)
+  rmse.lm.int[k] <- sqrt(mean((hotel.test$log_arrivals - pred)^2))
+}
+
+data.frame(model = c("LM 1: main effects", "LM 2: near/far interactions (final)"),
+           mean_RMSE = c(mean(rmse.lm.main), mean(rmse.lm.int))) |>
+  knitr::kable(digits = 3, caption = "10-fold CV, RMSE on log(arrivals)")
+```
+
+The interactions also help out of sample: the test RMSE drops from `r round(mean(rmse.lm.main), 2)` to `r round(mean(rmse.lm.int), 2)` on the log scale. The GAM section below compares this structure with non-linear smooths.
+
 ## Non-Linear Model: GAM
 
 ### Model building
