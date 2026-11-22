@@ -4,7 +4,7 @@
 library(readr)
 library(dplyr)
 library(ggplot2)
-library(tidyr)   # pivot_wider()
+library(tidyr)  
 library(car) 
 
 #minimal theme
@@ -82,8 +82,6 @@ ggplot(hotel, aes(rel_income)) + geom_histogram(bins = 40)
 #check continuous predictor: GDP growth in origin country
 summary(hotel$gdp_growth_origin)
 ggplot(hotel, aes(gdp_growth_origin)) + geom_histogram(bins = 40)
-
-#-----------------------------------EDA plots----------------------------------
 
 #eda origin
 country_order <- hotel |>

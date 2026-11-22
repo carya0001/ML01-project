@@ -28,6 +28,12 @@ theme_set(theme_minimal(base_size = 11) +
 group_cols <- c(near = "#0072B2", far = "#E69F00")
 ```
 
+## Data Import
+
+```{r results='hide', message=FALSE}
+swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
+```
+
 # Introduction
 
 
@@ -170,7 +176,134 @@ vif(lm.vif)
 
 # Models
 
-## Linear Model 
+## Linear Model
+
+Chaitanya Arya took the lead on this method.
+
+The linear model is our reference model. It answers the question: how many more or fewer visitors does a canton get from a market, and how much of this is explained by time, the covid years, the exchange rate and the economy of the origin country? The response is `log_arrivals`, so each coefficient $b$ is read as a change of about $100 \cdot (e^{b} - 1)$ % in arrivals. Following the collinearity check, `log_beds` and `rel_income` are left out.
+
+### Model building
+
+We start with main effects only.
+
+```{r lm-main}
+lm.main <- lm(log_arrivals ~ canton + origin_country + year + covid_period +
+                real_fx_index + gdp_growth_origin,
+              data = hotel)
+
+drop1(lm.main, test = "F") |>
+  as.data.frame() |>
+  knitr::kable(digits = 3, caption = "LM 1: F-test for dropping each term")
+```
+
+Canton, origin market, year and the covid period are clearly needed (R² = `r round(summary(lm.main)$r.squared, 2)`). The exchange rate and GDP growth are not significant once the origin market is in the model: most of the differences in the exchange rate are between countries, and those are already captured by `origin_country`.
+
+The EDA showed that near and far markets reacted differently to covid and do not go to the same cantons. So in a second model we let the covid effect, the exchange-rate effect and the canton effect differ between near and far markets.
+
+```{r lm-int}
+lm.int <- lm(log_arrivals ~ canton + origin_country + year + covid_period +
+               real_fx_index + gdp_growth_origin +
+               origin_group:real_fx_index + origin_group:covid_period +
+               canton:origin_group,
+             data = hotel)
+
+anova(lm.main, lm.int) |>
+  as.data.frame() |>
+  knitr::kable(digits = 3, caption = "LM 1 vs LM 2 (with near/far interactions)")
+```
+
+The interactions improve the model a lot (R² goes up to `r round(summary(lm.int)$r.squared, 2)`), so LM 2 is our final linear model.
+
+### Interpretation
+
+```{r lm-effects}
+b <- coef(lm.int)
+V <- vcov(lm.int)
+
+# % change in arrivals with 95% CI; for far markets: main effect + interaction
+pct_effect <- function(terms) {
+  est <- sum(b[terms])
+  se  <- sqrt(sum(V[terms, terms]))
+  round(100 * (exp(est + c(-1.96, 0, 1.96) * se) - 1), 1)
+}
+
+effects <- rbind(
+  "Year (+1)"                  = pct_effect("year"),
+  "During covid, near markets" = pct_effect("covid_periodduring"),
+  "During covid, far markets"  = pct_effect(c("covid_periodduring", "covid_periodduring:origin_groupfar")),
+  "Post covid, near markets"   = pct_effect("covid_periodpost"),
+  "Post covid, far markets"    = pct_effect(c("covid_periodpost", "covid_periodpost:origin_groupfar")),
+  "FX index +1, near markets"  = pct_effect("real_fx_index"),
+  "FX index +1, far markets"   = pct_effect(c("real_fx_index", "real_fx_index:origin_groupfar")),
+  "GDP growth +1 pp"           = pct_effect("gdp_growth_origin")
+)
+colnames(effects) <- c("lower 95%", "% change", "upper 95%")
+knitr::kable(effects, caption = "LM 2: effects on arrivals in %")
+```
+
+- **Trend:** with everything else fixed, arrivals grow by about `r effects["Year (+1)", 2]` % per year.
+- **Covid:** in 2020-2021, near markets lost about two thirds of their arrivals, while far markets almost disappeared (`r effects["During covid, far markets", 2]` %). After covid (2022-2025), both are still below the pre-covid trend line, and far markets more so (`r effects["Post covid, far markets", 2]` % vs `r effects["Post covid, near markets", 2]` %). Because the yearly trend keeps adding about 11 % per year, this matches the EDA: near markets were back at their 2019 level by 2023, while far markets were still below it in 2024.
+- **Exchange rate and GDP:** a 1-point stronger origin currency (in real terms) does not significantly change arrivals for either group, and one extra percentage point of GDP growth adds only about `r effects["GDP growth +1 pp", 2]` %. Within a market, these yearly changes matter much less than covid and the long-term trend.
+
+The canton × origin group interaction shows where far markets go compared with near markets:
+
+```{r lm-canton, fig.height = 5}
+ci <- confint(lm.int)
+k  <- grep("^canton.*:origin_groupfar$", names(b))
+canton_far <- data.frame(
+  canton = sub("^canton(.*):origin_groupfar$", "\\1", names(b)[k]),
+  est    = 100 * (exp(b[k]) - 1),
+  lower  = 100 * (exp(ci[k, 1]) - 1),
+  upper  = 100 * (exp(ci[k, 2]) - 1)
+)
+
+ggplot(canton_far, aes(est, reorder(canton, est))) +
+  geom_vline(xintercept = 0, linetype = 2, colour = "grey50") +
+  geom_pointrange(aes(xmin = lower, xmax = upper), colour = group_cols["far"]) +
+  labs(x = "Extra % arrivals of far markets compared with near markets (vs Aargau)",
+       y = NULL)
+```
+
+Compared with the reference canton Aargau, far markets are strongly over-represented in Bern, Obwalden, Lucerne, Zurich and Geneva, which are the classic Jungfrau, Titlis/Lake Lucerne and city destinations. Far markets are under-represented in Jura, Thurgau and Glarus. For a tourism agency, this means that money aimed at far markets is best spent on the cantons that already attract them, while smaller cantons depend mostly on near markets.
+
+### Model checks
+
+```{r lm-check, fig.height = 6}
+par(mfrow = c(2, 2))
+plot(lm.int)
+```
+
+The residuals are centred around zero with fairly constant variance. The lower tail is heavier than normal. This comes mainly from the 25 rows with zero arrivals (small far markets in small cantons), which the log scale pulls far down.
+
+### Cross-validation
+
+```{r lm-cv, cache = TRUE}
+set.seed(10)
+n     <- nrow(hotel)
+folds <- sample(rep(1:10, length.out = n))
+
+rmse.lm.main <- c()
+rmse.lm.int  <- c()
+
+for (k in 1:10) {
+  hotel.train <- hotel[folds != k, ]
+  hotel.test  <- hotel[folds == k, ]
+
+  fit  <- lm(formula(lm.main), data = hotel.train)
+  pred <- predict(fit, newdata = hotel.test)
+  rmse.lm.main[k] <- sqrt(mean((hotel.test$log_arrivals - pred)^2))
+
+  fit  <- lm(formula(lm.int), data = hotel.train)
+  pred <- predict(fit, newdata = hotel.test)
+  rmse.lm.int[k] <- sqrt(mean((hotel.test$log_arrivals - pred)^2))
+}
+
+data.frame(model = c("LM 1: main effects", "LM 2: near/far interactions (final)"),
+           mean_RMSE = c(mean(rmse.lm.main), mean(rmse.lm.int))) |>
+  knitr::kable(digits = 3, caption = "10-fold CV, RMSE on log(arrivals)")
+```
+
+The interactions also help out of sample: the test RMSE drops from `r round(mean(rmse.lm.main), 2)` to `r round(mean(rmse.lm.int), 2)` on the log scale. The GAM section below compares this structure with non-linear smooths.
 
 ## Non-Linear Model: GAM
 
@@ -334,9 +467,6 @@ boxplot(rmse.gam.main, rmse.gam.noint, rmse.gam.int, rmse.lm.int,
         ylab = "Test RMSE")
 ```
 
-<<<<<<< Updated upstream
-## Generalized Linear Model 
-=======
 GAM 3 has the lowest test RMSE (`r round(mean(rmse.gam.int), 2)` vs `r round(mean(rmse.lm.int), 2)` for LM 2), and the boxes do not overlap, so the ranking does not depend on the split. On the log scale, an RMSE of `r round(mean(rmse.gam.int), 2)` means a typical prediction is off by a factor of about `r round(exp(mean(rmse.gam.int)), 1)`. The gain over LM 2 is small. The near/far interactions add much more than the smooth curves do.
 
 Random folds test how well a model fills in a canton-market-year it has not seen. The agency will also want to know about the next years. As a check, we fit on 2016-2023 and predict 2024-2025 (80%/20% of the rows). With 8 training years, the year smooth can have at most `k = 8`.
@@ -363,9 +493,138 @@ data.frame(model = c("GAM 3", "LM 2"),
 Here the LM predicts the future better (`r round(rmse.time.lm, 2)` vs `r round(rmse.time.gam, 2)`). The GAM's year curve follows the covid recovery closely and then carries its last bend beyond 2023, while the LM continues a straight yearly trend. So the GAM is the better model for describing the past ten years, and the LM is the safer model for predicting future years.
 
 ## Generalized Linear Model (Binomial)
->>>>>>> Stashed changes
 
-Pick one of Binomial or Poisson
+This section was lead by Benjamin Jud.
+
+Using a Binomial Generalized Linear Model, we will attempt to model and predict growth from any specific country based market, with a focus on discovering the of impact economic metrics such as origin GDP gowtrh, foreign exchange rates, relative income, whether countries need visitor visas, and whether grouping near or far makes a difference.
+
+The following is an overview of growth, where `1` represents a year-over-year increase in hotel stays from that particular country, and `0` represents a decline in hotel stays. To model this variable, we display the proportion of canton-origin market combinations which showed a year-over-year increase in growth.
+
+```{r include=FALSE}
+n_growth = tapply(swiss_hotel_panel$growth == 1, swiss_hotel_panel$year, sum, na.rm = TRUE)
+
+yoy_growth = as.numeric(n_growth) / as.numeric(table(swiss_hotel_panel$year))
+```
+
+```{r echo=FALSE}
+years = unique(swiss_hotel_panel$year)
+
+plot(years, yoy_growth, type = "b", pch = 16,
+     xlab = "Year", ylab = "Proportion of Canton-Country Combinations with YoY growth",
+     xaxp = c(216, 2025, 1),
+     main = "YoY Growth in Hotel Stays", xaxt = "n")
+
+axis(1, at = years)
+```
+
+From 2016 to 2018 hotel growth was relatively stable, before slightly dipping in 2019 and achieving no growth in 2020 due to the COVID-19 pandemic. 2021 and 2022 lead with high growth rates, before rates stabilized at higher than pre-pandemic levels in 2023 to 2025.
+
+First, we split our data into a training and testing set such that we can later run a prediction against the model, and validate our outcomes. We will be using a split of 70% (training) and 30% (testing).
+
+```{r}
+
+glm_sample_rows = sample.int(nrow(swiss_hotel_panel), floor(0.7 * nrow(swiss_hotel_panel)))
+
+glm_train_dataset <- swiss_hotel_panel[glm_sample_rows, ]   
+glm_test_dataset  <- swiss_hotel_panel[-glm_sample_rows, ]  
+```
+
+Next, we will construct a binomial GLM Model to find factors that contribute to this growth.
+
+```{r}
+##not sure how many vars you can include in one of these
+glm.growth = glm(growth ~ 
+                  gdp_growth_origin
+                 +real_fx_index
+                 +rel_income
+                 +visa_required
+                 +origin_group,
+                 data = glm_train_dataset,
+                 family = 'binomial')
+summary(glm.growth)
+```
+
+Through the model summary call, four of five economic indicators (`gdp_growth_origin`, `real_fx_index`, `rel_income`, & `visa_required`) showed statistical significance.
+
+```{r echo=FALSE}
+
+coef_table = data.frame(
+  "Predictive_Variable" = colnames(glm.growth$model)[-1][-5],
+  Coefficient = coef(glm.growth)[-1][-5],
+  "Odds" = exp(coef(glm.growth)[-1][-5]),
+  "Odds_Percent_Increase" = (exp(coef(glm.growth)[-1][-5])-1) *100,
+  row.names   = NULL
+)
+coef_table
+
+```
+
+The `odds` column represents the exponentially transformed coefficient, where a single unit increase in the predictive variable creates an increase in the odds of hotels having growth from any particular origin market. `Odds_Percent_Increase` represents the percent increase on growth if the predictive value were to change.
+
+In this model, `rel_income` shows the odds by a significant margin, followed by `gpd_growth_origin`, while `real_fx_index` slightly reduces growth, and `visa_required` significantly reduces growth.
+
+```{r include=FALSE}
+## this block does not print in the knitted version, just for calculation & transparency
+indian_median = median(swiss_hotel_panel$rel_income[swiss_hotel_panel$origin_country == "India"])
+indian_median
+```
+
+Relative income, which is defined as any countries median income compared to the Swiss income (controlled for exchange rates and year), is an interesting factor to review in this model, as the countries selected in this analysis all have lower incomes than Switzerland. While certain developed nations have higher relative income, India has a relative income to Switzerland of just 9.28% (median) across the measured time period.
+
+#### Predicting Growth from Origin Country GDP Growth
+
+```{r}
+glm.growth_origin = glm(growth~gdp_growth_origin, data = glm_train_dataset, family = 'binomial')
+summary(glm.growth_origin)
+```
+
+```{r echo=FALSE}
+
+glm_origin_growth_predict_response = predict(glm.growth_origin, newdata = glm_train_dataset, type = "response")
+b = coef(glm.growth_origin)
+intercept_50p = -b[1] / b[2]
+
+plot(glm_train_dataset$gdp_growth_origin,
+     jitter(glm_train_dataset$growth, amount = 0.03),
+     pch = 16, 
+     col = rgb(0, 0, 0, 0.3),
+     xlab = "Origin Country GDP Growth (%)", 
+     ylab = "Growth in Swiss Hotels")
+title("Visitors come to Switzerland when their Country is Growing")
+
+ord = order(glm_train_dataset$gdp_growth_origin)
+lines(
+  glm_train_dataset$gdp_growth_origin[ord],
+  glm_origin_growth_predict_response[ord],
+  col = "red",
+  lwd = 3
+)
+#abline(h = 0.5)
+#abline(v = intercept_50p)
+
+ #vert segmewnt
+segments(
+  x0 = intercept_50p, y0 = -2,
+  x1 = intercept_50p, y1 = 0.5,
+  lty = 2, col = "gray20"
+)
+
+#horiz segment
+segments( 
+  x0 = -12, y0 = 0.5,
+  x1 = intercept_50p, y1 = 0.5,
+  lty = 2, col = "gray20"
+)
+
+
+print(paste("Origin GPD Growth at 50%:", round(-b[1] / b[2], 3), 
+            "Log-Odds:", round(exp(b[2]), 3)))
+
+```
+
+While looking at the chart, it may seem like there is not a large impact of origin country GDP growth on resulting growth among Swiss hotels for visitors from that particular country. For a 50% chance in hotel growth, the corresponding country shows growth of just 0.108%. Reviewing the coefficient of the GLM Binomial model, once transformed by the exponential, yields 1.218. This can be interpreted that a one percent increase in the GDP of the origin country, adds 21.8% increase in likelihood of growth of overnight stays by visitors of that particular country.
+
+Hotel management staff, should focus on attracting visitors from markets which are growing, even if at minimal rates. Additionally, there is higher growth likelihoods which can be found by the hotels if they focus on attracting markets which are experiencing higher rates of growth.
 
 ## Support Vector Machine
 
