@@ -26,6 +26,7 @@ hotel <- read_csv("data/processed/swiss_hotel_panel.csv", show_col_types = FALSE
 dim(hotel)                 # 3120 rows = 26 cantons x 12 markets x 10 years
 str(hotel)                 # canton, origin_country, origin_group, covid_period are text
 colSums(is.na(hotel))      # arrivals, overnights, share_in_canton: 2 NA (hidden by the BFS)
+                           # avg_stay: 27 NA, growth: 4 NA
 
 hotel |> filter(is.na(arrivals)) |> select(year, canton, origin_country)
 # Appenzell Innerrhoden, GCC and South Korea, 2022: no response, so we drop them
@@ -98,6 +99,10 @@ hotel |>
   scale_fill_manual(values = group_cols) +
   labs(x = "log(arrivals)", y = NULL, fill = "Market")
 
+# median arrivals per canton and year for Germany (largest market)
+med.germany <- median(hotel$arrivals[hotel$origin_country == "Germany"])
+med.germany
+
 #eda canton
 hotel |>
   group_by(canton, origin_group) |>
@@ -143,6 +148,13 @@ ggplot(hotel, aes(real_fx_index, log_arrivals, colour = origin_group)) +
   scale_colour_manual(values = group_cols) +
   labs(x = "Real exchange-rate index (2016 = 100)", y = "log(arrivals)", colour = "Market")
 
+#eda gd growth
+ggplot(hotel, aes(gdp_growth_origin, log_arrivals, colour = origin_group)) +
+  geom_point(alpha = 0.15, size = 0.7) +
+  geom_smooth(method = "gam", formula = y ~ s(x)) +
+  scale_colour_manual(values = group_cols) +
+  labs(x = "Real GDP growth of origin country (%)", y = "log(arrivals)", colour = "Market")
+
 #eda beds
 ggplot(hotel, aes(log_beds, log_arrivals, colour = origin_group)) +
   geom_point(alpha = 0.15, size = 0.7) +
@@ -156,7 +168,7 @@ lm.vif <- lm(log_arrivals ~ canton + origin_country + year + real_fx_index +
                log_beds + rel_income + gdp_growth_origin,
              data = hotel)
 vif(lm.vif)
-#log_beds collinear with canton: drop beds
-#rel_income collinear with origin_country: drop rel_income
-#gdp_growth_origin and real_fx_index ok: keep
+#log_beds collinear with canton
+#rel_income collinear with origin_country
+#gdp_growth_origin and real_fx_index ok
 
