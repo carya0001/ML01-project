@@ -28,8 +28,17 @@ theme_set(theme_minimal(base_size = 11) +
 group_cols <- c(near = "#0072B2", far = "#E69F00")
 ```
 
+```{r results='hide', message=FALSE}
+swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
+```
+
 # Introduction
 
+# Data Sources
+
+```{r data-import, include=FALSE}
+swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
+```
 # Data Preparation
 
 ```{r data-check-na}
@@ -37,6 +46,7 @@ hotel <- read_csv("data/processed/swiss_hotel_panel.csv")
 hotel |> filter(is.na(arrivals)) |> select(year, canton, origin_country)
 hotel <- hotel |> filter(!is.na(arrivals))
 ```
+The BFS does not publish two values, namely Appenzell Innerrhoden, GCC and South Korea, 2022. We drop these two rows, which leaves `r nrow(hotel)` rows: 26 cantons × 12 origin markets × 10 years.
 
 ```{r prep}
 hotel <- hotel |>
@@ -44,45 +54,33 @@ hotel <- hotel |>
     canton         = factor(canton),
     origin_country = factor(origin_country),
     origin_group   = factor(origin_group, levels = c("near", "far")),
-    covid_period   = factor(covid_period, levels = c("pre", "during", "post"))
+    covid_period   = factor(covid_period, levels = c("pre", "during", "post")),
+    log_arrivals   = log1p(arrivals),
+    log_beds       = log(beds)
   )
 ```
+
+The text columns become factors, with "near" for the oring group and "pre" for the covid period as reference levels. `log_arrivals` and `log_beds` are explained in the next section.
 
 # Data Exploration
 
 ## Response: arrivals
 
-```{r arrivals-raw, include=FALSE}
-ggplot(hotel, aes(arrivals)) + geom_histogram(bins = 40)
-```
+```{r eda-arrivals, fig.height = 5, fig.show = "hold", out.width = "50%"}
+ggplot(hotel, aes(arrivals)) +
+  geom_histogram(bins = 40, fill = "grey60", colour = "white") +
+  scale_x_continuous(labels = scales::comma) +
+  labs(title = "Arrivals", x = "Arrivals per canton, market and year", y = "Number of rows")
 
-```{r arrivals-log, include=FALSE}
-hotel <- hotel |> mutate(log_arrivals = log1p(arrivals))
-ggplot(hotel, aes(log_arrivals)) + geom_histogram(bins = 40) 
+ggplot(hotel, aes(log_arrivals)) +
+  geom_histogram(bins = 40, fill = "grey60", colour = "white") +
+  labs(title = "log(arrivals + 1)", x = "log(arrivals + 1)", y = "Number of rows")
 ```
-
-## Continuous predictors
-
-```{r beds, include=FALSE}
-ggplot(hotel, aes(beds)) + geom_histogram(bins = 40)
-hotel <- hotel |> mutate(log_beds = log(beds))
-```
-
-```{r f, include=FALSE}
-ggplot(hotel, aes(real_fx_index)) + geom_histogram(bins = 40)
-```
-
-```{r income, include=FALSE}
-ggplot(hotel, aes(rel_income)) + geom_histogram(bins = 40)
-```
-
-```{r gdp, include=FALSE}
-ggplot(hotel, aes(gdp_growth_origin)) + geom_histogram(bins = 40)
-```
+Arrivals are an amount and very right-skewed: they range from 0 to about 500,000, while most rows are a few thousand. On the log scale the distribution is roughly symmetric, so models use `log_arrivals = log(arrivals + 1)`. The `+ 1` is needed for the `r sum(hotel$arrivals == 0)` rows with zero arrivals. On the log scale, effects read as percentage changes. For the same reason, hotel beds are also used on the log scale (`log_beds`).
 
 ## Origin markets
 
-```{r eda-origin}
+```{r eda-origin, fig.height = 3.5}
 country_order <- hotel |>
   group_by(origin_group, origin_country) |>
   summarise(med = median(log_arrivals), .groups = "drop") |>
@@ -96,10 +94,17 @@ hotel |>
   scale_fill_manual(values = group_cols) +
   labs(x = "log(arrivals)", y = NULL, fill = "Market")
 ```
+```{r med-germany, include=FALSE}
+# median arrivals per canton and year for Germany (largest market)
+med.germany <- median(hotel$arrivals[hotel$origin_country == "Germany"])
+med.germany
+```
+
+Germany is by far the largest market, with a median of `r format(round(med.germany), big.mark = ",")` arrivals per canton and year. The other near markets follow, and the United States is the only far market at their level. The other far markets are smaller and have wider boxes. The origin market is clearly an important predictor.
 
 ## Cantons
 
-```{r eda-canton}
+```{r eda-canton, fig.height = 3.5}
 hotel |>
   group_by(canton, origin_group) |>
   summarise(med = median(log_arrivals), .groups = "drop") |>
@@ -112,10 +117,11 @@ hotel |>
   scale_colour_manual(values = group_cols) +
   labs(x = "Median log(arrivals) per market", y = NULL, colour = "Market")
 ```
+The gap between near and far markets is not the same in every canton. In Zurich, Bern, Lucerne and Obwalden far markets are as large as near markets. In Thurgau, Glarus, Jura and the two Appenzells far markets are much more absent. The differences between cantons look large, which suggests a canton × market group interaction. We test it in the models.
 
 ## Year
 
-```{r eda-year}
+```{r eda-year, fig.height = 3.5}
 national <- hotel |>
   group_by(year, origin_country, origin_group) |>
   summarise(arrivals = sum(arrivals), .groups = "drop") |>
@@ -131,35 +137,30 @@ ggplot(national, aes(year, index, group = origin_country, colour = origin_group)
   scale_x_continuous(breaks = 2016:2025) +
   labs(x = NULL, y = "National arrivals (2019 = 100)", colour = "Market")
 ```
+Covid hit far markets much harder. Taken together, near markets fell to about half of their 2019 arrivals in 2020. Far markets fell to about 10 % and only got close to 2019 again in 2025, and they recovered very unevenly. The path over time is clearly not a straight line and differs between near and far markets.
 
-```{r eda-year-facet}
-ggplot(national, aes(year, index, colour = origin_group)) +
-  geom_hline(yintercept = 100, linetype = 2, colour = "grey50") +
-  geom_line() +
-  geom_point(size = 0.8) +
-  facet_wrap(~ origin_country) +
-  scale_colour_manual(values = group_cols) +
-  scale_x_continuous(breaks = 2020) +
-  labs(x = NULL, y = "National arrivals (2019 = 100)", colour = "Market")
-```
+## Exchange rate
 
-## Exchange rate and hotel beds
-
-```{r eda-fx}
+```{r eda-fx, fig.height = 3.5}
 ggplot(hotel, aes(real_fx_index, log_arrivals, colour = origin_group)) +
   geom_point(alpha = 0.15, size = 0.7) +
   geom_smooth(method = "gam", formula = y ~ s(x)) +
   scale_colour_manual(values = group_cols) +
   labs(x = "Real exchange-rate index (2016 = 100)", y = "log(arrivals)", colour = "Market")
 ```
+The exchange rate of near markets stays in a narrow range (about 97 to 109), while far market currencies move much more (about 65 to 113). For far markets, arrivals tend to be higher when the index is higher, but the curve is not a straight line and dips around 90 to 95. For near markets there is no clear pattern. A smooth curve for the exchange rate, separately for near and far markets, is worth trying in the models.
 
-```{r eda-beds}
-ggplot(hotel, aes(log_beds, log_arrivals, colour = origin_group)) +
+## GDP
+
+```{r eda-gdp, fig.height = 3.5}
+ggplot(hotel, aes(gdp_growth_origin, log_arrivals, colour = origin_group)) +
   geom_point(alpha = 0.15, size = 0.7) +
   geom_smooth(method = "gam", formula = y ~ s(x)) +
   scale_colour_manual(values = group_cols) +
-  labs(x = "log(hotel beds in canton)", y = "log(arrivals)", colour = "Market")
+  labs(x = "Real GDP growth of origin country (%)", y = "log(arrivals)", colour = "Market")
 ```
+
+For near markets the curve is fairly flat, highest around 0% and slightly lower at both ends. For far markets the curve goes up and down without a clear direction. GDP growth does not show a simple relationship with arrivals, which we check in the models.
 
 ## Collinearity
 
@@ -169,6 +170,7 @@ lm.vif <- lm(log_arrivals ~ canton + origin_country + year + real_fx_index +
              data = hotel)
 vif(lm.vif)
 ```
+`log_beds` and `rel_income` have very high values (16.5 and 10.2, respectively). The number of beds barely changes over time within a canton, so it is almost the same information as `canton`. Relative income barely changes within a country, so it is almost the same as `origin_country`. We therefore do not put them in the same model, but rather each model uses either canton and origin country, or beds and relative income.
 
 # Models
 
@@ -303,13 +305,27 @@ The interactions also help out of sample: the test RMSE drops from `r round(mean
 
 ## Non-Linear Model: GAM
 
+Laura Cunha took the lead on this method.
+
+The LM assumes that time and the exchange rate affect log(arrivals) in a straight line. The GAM lets the data choose the shape, meaning the effects of year, exchange rate and GDP growth are smooth curves.
+
+The GAM does not need the covid_period variable, since the year curves can follow each year separately, showing the covid drop and recovery directly.
+
+Canton and origin market stay in the model as categories, so each canton and each market keeps its own level of arrivals. The smooth curves then show how arrivals change with year, exchange rate or GDP growth for the same canton and the same market, not differences between large and small destinations.
+
+As in the linear model, log_beds and rel_income are left out because they are almost the same information as canton and origin market.
+
 ### Model building
+
+We start GAM 1 with one smooth each for year, the real exchange rate and GDP growth of the origin country.
 
 ```{r gam-main}
 gam.main <- gam(log_arrivals ~ canton + origin_country +
                   s(year, k = 10) + s(real_fx_index) + s(gdp_growth_origin),
                 data = hotel)
 ```
+
+The EDA showed that near and far markets went through covid very differently. So in GAM 2 the year and exchange-rate curves are fitted separately for near and far markets. `origin_group` adds nothing on top of `origin_country`. It is only needed because the curves are fitted for near/far markets with `by = origin_group`.
 
 ```{r gam-noint}
 gam.noint <- gam(
@@ -322,6 +338,8 @@ gam.noint <- gam(
 anova(gam.main, gam.noint, test = "F")
 ```
 
+Separate curves improve the fit clearly. As in the linear model, GAM 3 lets each canton's level differ between near and far markets.
+
 ```{r gam-int}
 gam.int <- gam(
   log_arrivals ~ canton * origin_group + origin_country +
@@ -333,99 +351,152 @@ gam.int <- gam(
 anova(gam.noint, gam.int, test = "F")
 ```
 
-### Final model
+GAM 3 improves the fit again, and by more than the step from GAM 1 to GAM 2, so it is our final GAM. `year` has only 10 distinct values, so k = 10 is the most flexibility it can have.
+
+GAM 3 explains `r round(100 * summary(gam.int)$dev.expl, 1)` % of the variation in log(arrivals) (adjusted R² = `r round(summary(gam.int)$r.sq, 3)`), almost the same as LM 2 (R² = `r round(summary(lm.int)$r.squared, 3)`). The smooth curves add little fit on top of the near/far interactions.
+
+```{r gam-terms}
+anova(gam.int)
+```
+`anova()` tests each term while keeping all the others in the model. The canton × market group interaction (`canton:origin_group`) is clearly significant (p < 2e-16), so far and near markets do not go to the same cantons. Because of this interaction, canton and market group both matter and are not interpreted on their own, due to the principle of marginality. The origin country also has a very strong effect.
+
+All smooth terms show very strong evidence of an effect (p < 2e-16), except the exchange rate for near markets (edf 1.5, p = 0.38), meaning there is no evidence that it changes arrivals of near markets.
+
+### Interpretation
 
 ```{r gam-final}
 # smooth terms only; the full summary lists ~60 canton coefficients
-summary(gam.int)$s.table
+summary(gam.int)$s.table |> knitr::kable(digits = 3)
 ```
 
 ```{r gam-smooths, fig.height = 7}
 par(mfrow = c(3, 2))
-plot(gam.int, select = 1, shade = TRUE)  # year, near
-plot(gam.int, select = 2, shade = TRUE)  # year, far
-plot(gam.int, select = 3, shade = TRUE)  # fx, near
-plot(gam.int, select = 4, shade = TRUE)  # fx, far
-plot(gam.int, select = 5, shade = TRUE)  # GDP growth
+plot(gam.int, select = 1, shade = TRUE, main = "Year, near markets")
+plot(gam.int, select = 2, shade = TRUE, main = "Year, far markets")
+plot(gam.int, select = 3, shade = TRUE, main = "Exchange rate, near markets")
+plot(gam.int, select = 4, shade = TRUE, main = "Exchange rate, far markets")
+plot(gam.int, select = 5, shade = TRUE, main = "GDP growth of origin")
 ```
+
+Since the curves are on the log scale, a change on the y-axis is a percentage change in arrivals. A rise of 0.1 means about 10 % more arrivals, a rise of 1 means almost three times as many (e.g. from 1,000 to about 2,720), and a drop of 1 means about 63 % fewer (from 1,000 to about 370).
+
+- **Year:** both curves are non-linear (edf 7.8 for near and 8.8 for far markets, with a maximum of 9), dropping sharply in 2020-2021 and then recovering. Compared with 2019, near markets recovered by 2023. Far markets, on the other hand, only got back to their 2019 level in 2025.
+- **Exchange rate, near markets:** the curve is almost a straight line (edf 1.5) and not significant, meaning a stronger or weaker euro or pound within the observed range (index mostly between 99 and 108) does not change arrivals in a way we can detect.
+- **Exchange rate, far markets:** the curve is rising overall but not steadily. Though significant, the low index values come from countries whose currencies lost value after 2020. So part of this curve may reflect slow post-covid recovery rather than the exchange rate itself. Therefore, we do not read it as a clear currency effect.
+- **GDP growth:** the curve is very wiggly (edf about 9). Arrivals are lowest at GDP growth around -4 % and highest around 6 to 7 %. Because the curve goes up and down, we do not read it as a clear effect of the origin's economy.
+- **Cantons:** the canton × group effects agree with the LM. Compared with Aargau, far markets are strongly over-represented in Bern, Obwalden, Lucerne, Zurich and Geneva, and under-represented in Jura, Thurgau and Glarus.
+
+For the agency, the GAM tells the same story as the linear model: the differences between cantons and markets and the covid recovery matter much more than yearly changes in GDP growth. The one difference is the exchange rate for far markets, where the GAM finds a modest effect, so it is worth watching but not a main reason to shift the budget.
 
 ### Model checks
 
-```{r gam-check, fig.height = 6}
+```{r gam-check, fig.height = 4.5}
 par(mfrow = c(2, 2))
 gam.check(gam.int)
 ```
 
+- QQ-plot of the residuals (normality): most points lie on the line, but the lower tail falls clearly below it, so the residuals are not fully normal.
+- Residuals vs linear predictor (mean zero, constant variance): the cloud is centred on 0. The spread is somewhat larger for small predicted values (small markets in small cantons). The diagonal line of points going down on the left comes from the 25 rows with zero arrivals.
+- Histogram of the residuals (normality, second view): a roughly symmetric bell around 0, with a long tail to the left (same rows as in the QQ-plot).
+- Response vs fitted values (overall fit): the points lie close to the diagonal, so the model fits well overall. The exception is the row of zero arrivals at the bottom, which the model predicts too high.
+
+Overall the assumptions are reasonably met. The only clear problem is the zero-arrival rows, which the log scale pulls far down, as in the LM.
+
+The k-index is slightly below 1 for all smooths. For `year`, `k` cannot be raised (only 10 distinct years). For GDP growth, a larger `k` would only make an already wiggly curve more flexible, which we do not need for interpretation.
+
 ### Cross-validation
 
+We compare the three GAMs with the final linear model (LM 2) with repeated 10-fold cross-validation and report the RMSE on log(arrivals).
+
 ```{r gam-cv, cache = TRUE}
-# linear model with the same structure as the final GAM (fair comparison)
-lm.equiv <- log_arrivals ~ canton * origin_group + origin_country +
-  factor(year) * origin_group + real_fx_index * origin_group +
-  gdp_growth_origin
 
 set.seed(10)
 n <- nrow(hotel)
-mse.gam.main  <- c()
-mse.gam.noint <- c()
-mse.gam.int   <- c()
-mse.lm.equiv  <- c()
+rmse.gam.main  <- c()
+rmse.gam.noint <- c()
+rmse.gam.int   <- c()
+rmse.lm.rep  <- c()
 
-for (i in 1:20) {
+for (i in 1:10) {
   # 1) prepare data: new random permutation each repetition
   inds.permuted  <- sample(1:n, replace = FALSE)
   hotel.permuted <- hotel[inds.permuted, ]
   folds <- cut(1:n, breaks = 10, labels = FALSE)
 
-  mse.fold.main  <- c()
-  mse.fold.noint <- c()
-  mse.fold.int   <- c()
-  mse.fold.lm    <- c()
+  rmse.fold.main  <- c()
+  rmse.fold.noint <- c()
+  rmse.fold.int   <- c()
+  rmse.fold.lm    <- c()
 
   for (k in 1:10) {
     ind.test    <- which(folds == k)
     hotel.test  <- hotel.permuted[ind.test, ]
     hotel.train <- hotel.permuted[-ind.test, ]
 
-    # 2) fit on train, 3) predict test, 4) compute MSE
+    # 2) fit on train, 3) predict test, 4) compute RMSE
     fit  <- gam(formula(gam.main), data = hotel.train)
     pred <- predict(fit, newdata = hotel.test)
-    mse.fold.main[k] <- mean((hotel.test$log_arrivals - pred)^2)
+    rmse.fold.main[k] <- sqrt(mean((hotel.test$log_arrivals - pred)^2))
 
     fit  <- gam(formula(gam.noint), data = hotel.train)
     pred <- predict(fit, newdata = hotel.test)
-    mse.fold.noint[k] <- mean((hotel.test$log_arrivals - pred)^2)
+    rmse.fold.noint[k] <- sqrt(mean((hotel.test$log_arrivals - pred)^2))
 
     fit  <- gam(formula(gam.int), data = hotel.train)
     pred <- predict(fit, newdata = hotel.test)
-    mse.fold.int[k] <- mean((hotel.test$log_arrivals - pred)^2)
+    rmse.fold.int[k] <- sqrt(mean((hotel.test$log_arrivals - pred)^2))
 
-    fit  <- lm(lm.equiv, data = hotel.train)
+    fit  <- lm(formula(lm.int), data = hotel.train)
     pred <- predict(fit, newdata = hotel.test)
-    mse.fold.lm[k] <- mean((hotel.test$log_arrivals - pred)^2)
+    rmse.fold.lm[k] <- sqrt(mean((hotel.test$log_arrivals - pred)^2))
   }
 
   # average over 10 folds
-  mse.gam.main[i]  <- mean(mse.fold.main)
-  mse.gam.noint[i] <- mean(mse.fold.noint)
-  mse.gam.int[i]   <- mean(mse.fold.int)
-  mse.lm.equiv[i]  <- mean(mse.fold.lm)
+  rmse.gam.main[i]  <- mean(rmse.fold.main)
+  rmse.gam.noint[i] <- mean(rmse.fold.noint)
+  rmse.gam.int[i]   <- mean(rmse.fold.int)
+  rmse.lm.rep[i]    <- mean(rmse.fold.lm)
 }
 ```
 
-```{r gam-cv-results}
+```{r gam-cv-results, fig.height = 3.5}
 data.frame(
-  model    = c("GAM 1: main effects", "GAM 2: smooths by group",
-               "GAM 3: + interaction (final)", "LM, same structure"),
-  mean_MSE = c(mean(mse.gam.main), mean(mse.gam.noint),
-               mean(mse.gam.int), mean(mse.lm.equiv))
+  model = c("GAM 1: main effects", "GAM 2: smooths by group",
+               "GAM 3: + interaction (final)", "LM 2"),
+  mean.RMSE = c(mean(rmse.gam.main), mean(rmse.gam.noint),
+               mean(rmse.gam.int), mean(rmse.lm.rep))
 ) |>
-  knitr::kable(digits = 4)
+  knitr::kable(digits = 3, col.names = c("Model", "Mean RMSE (log scale)"))
 
-boxplot(mse.gam.main, mse.gam.noint, mse.gam.int, mse.lm.equiv,
-        names = c("GAM 1", "GAM 2", "GAM 3", "LM"),
-        ylab = "Test MSE")
+boxplot(rmse.gam.main, rmse.gam.noint, rmse.gam.int, rmse.lm.rep,
+        names = c("GAM 1", "GAM 2", "GAM 3", "LM 2"),
+        ylab = "Test RMSE")
 ```
+
+GAM 3 has the lowest test RMSE (`r round(mean(rmse.gam.int), 2)` vs `r round(mean(rmse.lm.rep), 2)` for LM 2), and the boxes do not overlap, so the ranking does not depend on the split. On the log scale, an RMSE of `r round(mean(rmse.gam.int), 2)` means a typical prediction is off by a factor of about `r round(exp(mean(rmse.gam.int)), 1)`. The gain over LM 2 is small. The near/far interactions add much more than the smooth curves do.
+
+Random folds test how well a model fills in a canton-market-year it has not seen. The agency will also want to know about the next years. As a check, we fit on 2016-2023 and predict 2024-2025 (80%/20% of the rows). With 8 training years, the year smooth can have at most `k = 8`.
+
+```{r gam-time-split}
+hotel.train <- hotel[hotel$year <= 2023, ]
+hotel.test  <- hotel[hotel$year >= 2024, ]
+
+f.time <- update(formula(gam.int), . ~ . - s(year, by = origin_group, k = 10) + s(year, by = origin_group, k = 8))
+
+fit  <- gam(f.time, data = hotel.train)
+pred <- predict(fit, newdata = hotel.test)
+rmse.time.gam <- sqrt(mean((hotel.test$log_arrivals - pred)^2))
+
+fit  <- lm(formula(lm.int), data = hotel.train)
+pred <- predict(fit, newdata = hotel.test)
+rmse.time.lm <- sqrt(mean((hotel.test$log_arrivals - pred)^2))
+
+data.frame(model = c("GAM 3", "LM 2"),
+           RMSE  = c(rmse.time.gam, rmse.time.lm)) |>
+  knitr::kable(digits = 3, caption = "Train 2016-2023, test 2024-2025: RMSE")
+```
+
+Here the LM predicts the future better (`r round(rmse.time.lm, 2)` vs `r round(rmse.time.gam, 2)`). The GAM's year curve follows the covid recovery closely and then carries its last bend beyond 2023, while the LM continues a straight yearly trend. So the GAM is the better model for describing the past ten years, and the LM is the safer model for predicting future years.
 
 ## Generalized Linear Model (Binomial)
 
