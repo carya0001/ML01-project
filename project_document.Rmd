@@ -2,13 +2,13 @@
 title: "Swiss hotel demand: where should a tourism agency spend?"
 author: "Benjamin Jud, Chaitanya Arya, Laura Cunha"
 output:
-  pdf_document:
-    toc: true
-    latex_engine: xelatex
   html_document:
     toc: true
     toc_float: true
     code_folding: hide
+  pdf_document:
+    toc: true
+    latex_engine: xelatex
 date: "`r Sys.Date()`"
 ---
 
@@ -39,7 +39,6 @@ swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
 ```{r data-import, include=FALSE}
 swiss_hotel_panel <- read_csv("data/processed/swiss_hotel_panel.csv")
 ```
-
 # Data Preparation
 
 ```{r data-check-na}
@@ -77,10 +76,10 @@ ggplot(hotel, aes(log_arrivals)) +
   geom_histogram(bins = 40, fill = "grey60", colour = "white") +
   labs(title = "log(arrivals + 1)", x = "log(arrivals + 1)", y = "Number of rows")
 ```
-
 Arrivals are an amount and very right-skewed: they range from 0 to about 500,000, while most rows are a few thousand. On the log scale the distribution is roughly symmetric, so models use `log_arrivals = log(arrivals + 1)`. The `+ 1` is needed for the `r sum(hotel$arrivals == 0)` rows with zero arrivals. On the log scale, effects read as percentage changes. For the same reason, hotel beds are also used on the log scale (`log_beds`).
 
 ## Origin markets
+
 ```{r eda-origin, fig.height = 3.5}
 country_order <- hotel |>
   group_by(origin_group, origin_country) |>
@@ -104,6 +103,7 @@ med.germany
 Germany is by far the largest market, with a median of `r format(round(med.germany), big.mark = ",")` arrivals per canton and year. The other near markets follow, and the United States is the only far market at their level. The other far markets are smaller and have wider boxes. The origin market is clearly an important predictor.
 
 ## Cantons
+
 ```{r eda-canton, fig.height = 3.5}
 hotel |>
   group_by(canton, origin_group) |>
@@ -506,14 +506,14 @@ Using a Binomial Generalized Linear Model, we will attempt to model and predict 
 
 The following is an overview of growth, where `1` represents a year-over-year increase in hotel stays from that particular country, and `0` represents a decline in hotel stays. To model this variable, we display the proportion of canton-origin market combinations which showed a year-over-year increase in growth.
 
-```{r include=FALSE}
-n_growth = tapply(swiss_hotel_panel$growth == 1, swiss_hotel_panel$year, sum, na.rm = TRUE)
+```{r glm_data_explore, include=FALSE}
+n_growth = tapply(hotel$growth == 1, hotel$year, sum, na.rm = TRUE)
 
-yoy_growth = as.numeric(n_growth) / as.numeric(table(swiss_hotel_panel$year))
+yoy_growth = as.numeric(n_growth) / as.numeric(table(hotel$year))
 ```
 
-```{r echo=FALSE}
-years = unique(swiss_hotel_panel$year)
+```{r glm_data_explore_2, echo=FALSE}
+years = unique(hotel$year)
 
 plot(years, yoy_growth, type = "b", pch = 16,
      xlab = "Year", ylab = "Proportion of Canton-Country Combinations with YoY growth",
@@ -527,17 +527,16 @@ From 2016 to 2018 hotel growth was relatively stable, before slightly dipping in
 
 First, we split our data into a training and testing set such that we can later run a prediction against the model, and validate our outcomes. We will be using a split of 70% (training) and 30% (testing).
 
-```{r}
-
-glm_sample_rows = sample.int(nrow(swiss_hotel_panel), floor(0.7 * nrow(swiss_hotel_panel)))
-
-glm_train_dataset <- swiss_hotel_panel[glm_sample_rows, ]   
-glm_test_dataset  <- swiss_hotel_panel[-glm_sample_rows, ]  
+```{r glm_train_test, echo=TRUE}
+set.seed(10)
+glm_sample_rows = sample.int(nrow(hotel), floor(0.7 * nrow(hotel)))
+glm_train_dataset = hotel[glm_sample_rows, ]   
+glm_test_dataset = hotel[-glm_sample_rows, ]  
 ```
 
 Next, we will construct a binomial GLM Model to find factors that contribute to this growth.
 
-```{r}
+```{r glm_model}
 ##not sure how many vars you can include in one of these
 glm.growth = glm(growth ~ 
                   gdp_growth_origin
@@ -550,15 +549,15 @@ glm.growth = glm(growth ~
 summary(glm.growth)
 ```
 
-Through the model summary call, four of five economic indicators (`gdp_growth_origin`, `real_fx_index`, `rel_income`, & `visa_required`) showed statistical significance.
+Through the model summary call, four of five economic indicators (`gdp_growth_origin`, `real_fx_index`, `rel_income`, & `origin_groupfar`) showed statistical significance p\< 0.05.
 
-```{r echo=FALSE}
+```{r glm_coef_table, echo=FALSE}
 
 coef_table = data.frame(
-  "Predictive_Variable" = colnames(glm.growth$model)[-1][-5],
-  Coefficient = coef(glm.growth)[-1][-5],
-  "Odds" = exp(coef(glm.growth)[-1][-5]),
-  "Odds_Percent_Increase" = (exp(coef(glm.growth)[-1][-5])-1) *100,
+  "Predictive_Variable" = colnames(glm.growth$model)[-1][-4],
+  Coefficient = coef(glm.growth)[-1][-4],
+  "Odds" = exp(coef(glm.growth)[-1][-4]),
+  "Odds_Percent_Increase" = (exp(coef(glm.growth)[-1][-4])-1) *100,
   row.names   = NULL
 )
 coef_table
@@ -567,24 +566,26 @@ coef_table
 
 The `odds` column represents the exponentially transformed coefficient, where a single unit increase in the predictive variable creates an increase in the odds of hotels having growth from any particular origin market. `Odds_Percent_Increase` represents the percent increase on growth if the predictive value were to change.
 
-In this model, `rel_income` shows the odds by a significant margin, followed by `gpd_growth_origin`, while `real_fx_index` slightly reduces growth, and `visa_required` significantly reduces growth.
+In this model, `rel_income` shows the odds by a significant margin, followed by `gpd_growth_origin`, while `real_fx_index` slightly reduces growth, and `visa_required` being true significantly reduces growth.
 
-```{r include=FALSE}
+```{r glm_median_countries, include=FALSE}
 ## this block does not print in the knitted version, just for calculation & transparency
-indian_median = median(swiss_hotel_panel$rel_income[swiss_hotel_panel$origin_country == "India"])
+indian_median = median(hotel$rel_income[hotel$origin_country == "India"])
 indian_median
 ```
 
-Relative income, which is defined as any countries median income compared to the Swiss income (controlled for exchange rates and year), is an interesting factor to review in this model, as the countries selected in this analysis all have lower incomes than Switzerland. While certain developed nations have higher relative income, India has a relative income to Switzerland of just 9.28% (median) across the measured time period.
+Relative income, which is defined as any countries median income compared to the Swiss income (controlled for exchange rates and year), is an interesting factor to review in this model, as the countries selected in this analysis all have lower incomes than Switzerland. While certain developed nations have higher relative income, India has a relative income to Switzerland of just 9.28% (median; calculation available in code) across the measured time period.
 
 #### Predicting Growth from Origin Country GDP Growth
 
-```{r}
+Using a larger set of data to create a dataset can create a model more true to real travelers, however, it makes it significantly more difficult to interpret how variables interact with each and how a model will respond to new data. In the following scenario, we present a highly simplified model which only looks at one factor: does real GDP growth in an origin market drive growth in that customer segment for Swiss hotels. The aim to to provide a simple, highly interpretable model which any hotel manager to view, to decide which markets they should prioritize in their marketing efforts.
+
+```{r glm_gdp_model}
 glm.growth_origin = glm(growth~gdp_growth_origin, data = glm_train_dataset, family = 'binomial')
 summary(glm.growth_origin)
 ```
 
-```{r echo=FALSE}
+```{r glm_gdp_predict, echo=FALSE}
 
 glm_origin_growth_predict_response = predict(glm.growth_origin, newdata = glm_train_dataset, type = "response")
 b = coef(glm.growth_origin)
@@ -605,8 +606,7 @@ lines(
   col = "red",
   lwd = 3
 )
-#abline(h = 0.5)
-#abline(v = intercept_50p)
+
 
  #vert segmewnt
 segments(
@@ -628,9 +628,9 @@ print(paste("Origin GPD Growth at 50%:", round(-b[1] / b[2], 3),
 
 ```
 
-While looking at the chart, it may seem like there is not a large impact of origin country GDP growth on resulting growth among Swiss hotels for visitors from that particular country. For a 50% chance in hotel growth, the corresponding country shows growth of just 0.108%. Reviewing the coefficient of the GLM Binomial model, once transformed by the exponential, yields 1.218. This can be interpreted that a one percent increase in the GDP of the origin country, adds 21.8% increase in likelihood of growth of overnight stays by visitors of that particular country.
+While looking at the chart, it may seem like there is not a large impact of origin country GDP growth on resulting growth among Swiss hotels for visitors from that particular country. For a 50% chance in hotel growth, the corresponding country shows growth of -0.038%. Reviewing the coefficient of the GLM Binomial model, once transformed by the exponential, yields 1.219. This can be interpreted that a one percent increase in the GDP of the origin country, adds 21.9% increase in likelihood of growth of overnight stays by visitors of that particular country.
 
-Hotel management staff, should focus on attracting visitors from markets which are growing, even if at minimal rates. Additionally, there is higher growth likelihoods which can be found by the hotels if they focus on attracting markets which are experiencing higher rates of growth.
+Hotel management staff should focus on attracting visitors from markets which are growing, even if at near zero (or even slightly negative) rates. Additionally, there is higher growth likelihoods which can be found by the hotels if they focus on attracting markets which are experiencing higher rates of growth. As such, managers should also consider what the growth rate of any country is when making decisions on which nationalities to market towards.
 
 ## Support Vector Machine
 
