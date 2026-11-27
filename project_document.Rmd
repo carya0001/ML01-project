@@ -74,7 +74,6 @@ ggplot(hotel, aes(log_arrivals)) +
   geom_histogram(bins = 40, fill = "grey60", colour = "white") +
   labs(title = "log(arrivals + 1): more symmetric", x = "log(arrivals + 1)", y = "Number of rows")
 ```
-<<<<<<< HEAD
 
 Arrivals are an amount and very right-skewed, ranging from 0 to about 500,000, while most rows are a few thousand. On the log scale the distribution is roughly symmetric, so models use `log_arrivals = log(arrivals + 1)`. The `+ 1` is needed for the `r sum(hotel$arrivals == 0)` rows with zero arrivals. On the log scale, effects read as percentage changes. For the same reason, hotel beds are also used on the log scale (`log_beds`).
 
@@ -114,9 +113,6 @@ ggplot(growth.data, aes(gdp_growth_origin, growth, colour = origin_group)) +
 About `r round(100 * mean(growth.data$growth))`% of all rows show growth, so the classes are not balanced. The share depends strongly on the year, since no market grew anywhere in 2020 and most almost all grew in 2022. In 2021, near markets already grew in about 73% of rows, far markets only in about 49%. Before covid the share was between about 47% and 73%, so in normal years many cantons grow while others decline.
 
 When the origin economy shrank strongly (below about -4% for near and -1% for far markets), there was no growth. Above that, the curves go up and down between about 55% and 95% without a clear direction. So the link between GDP growth and growth comes mostly from the covid year, meaning year and covid are the main candidates for explaining growth.
-=======
-Arrivals are an amount and very right-skewed: they range from 0 to about 500,000, while most rows are a few thousand. On the log scale the distribution is roughly symmetric, so models use `log_arrivals = log(arrivals + 1)`. The `+ 1` is needed for the `r sum(hotel$arrivals == 0)` rows with zero arrivals. On the log scale, effects read as percentage changes. For the same reason, hotel beds are also used on the log scale (`log_beds`).
->>>>>>> cc632cfb18f655c4d9d511322b46a0569ef7337e
 
 ## Origin markets
 
@@ -536,7 +532,11 @@ data.frame(model = c("GAM 3", "LM 2"),
   knitr::kable(digits = 3, caption = "Train 2016-2023, test 2024-2025: RMSE")
 ```
 
-Here the LM has the lower error (`r round(rmse.time.lm, 2)` vs `r round(rmse.time.gam, 2)`), so it predicts new years better than the GAM. With random folds it was the other way round (`r round(mean(rmse.lm.rep), 2)` vs `r round(mean(rmse.gam.int), 2)`). The GAM is therefore the better choice to describe the past ten years and the LM the better choice to predict the next ones.
+In summary:
+
+- On random folds GAM 3 has a slightly lower error than LM 2 (`r round(mean(rmse.gam.int), 2)` vs `r round(mean(rmse.lm.rep), 2)`). The near/far interactions improve the fit much more than the smooth curves.
+- For new years (2024-2025) the LM predicts better (`r round(rmse.time.lm, 2)` vs `r round(rmse.time.gam, 2)`).
+- The GAM is therefore the better choice to describe the past ten years, and the LM the better choice to predict the next ones.
 
 ## Generalized Linear Model (Binomial)
 
@@ -676,7 +676,7 @@ Hotel management staff should focus on attracting visitors from markets which ar
 
 The binomial GLM above asks whether a market grows in a canton from one year to the next. Here we ask the same question with a Support Vector Machine (SVM) and compare the two on the same data. An SVM does not give coefficients or probabilities. It looks for the boundary between "growth" and "decline" rows with the widest possible margin. Only the rows on or inside the margin (the support vectors) define this boundary. A radial kernel allows the boundary to be curved.
 
-### Data and set-up
+### Model building
 
 The response is `growth` as a factor ("decline"/"growth"). For a fair comparison, the SVM uses the same five predictors as the GLM: GDP growth of the origin, real exchange rate, relative income, visa requirement and near/far market. `svm()` scales all predictors by default (`scale = TRUE`). This matters because the SVM works with distances and without scaling the exchange-rate index (around 100) would dominate GDP growth (a few %).
 
@@ -708,8 +708,6 @@ nir <- max(prop.table(table(svm.data$growth)))
 `r round(100 * nir)`% of the rows show growth, so a model that always says "growth" is already right `r round(100 * nir)`% of the time (No Information Rate). Any useful model must beat this value.
 
 The five predictors only change between origin countries and years, not between cantons. All `r nrow(svm.data)` rows therefore have only `r n.cells` different predictor values (12 markets × 10 years). Within one market and year some cantons grow and others decline, but the model sees the same input for all of them and must give them the same prediction.
-
-### Model building and cross-validation
 
 We compare three SVMs with 10-fold cross-validation on the training set. `tune()` fits each model for every combination of the values in `ranges` and keeps the one with the lowest CV error, meaning the share of misclassified rows. The same seed before each `tune()` gives the same folds, so the three models are compared on the same data.
 
@@ -749,6 +747,8 @@ The CV accuracy is 1 minus the error:
 
 SVM 2 is our final SVM. Its best C (`r tune.rad$best.parameters$cost`) is at the edge of the grid and, since a large C means a narrower margin and more risk of overfitting, we do not tune further.
 
+### Interpretation
+
 The two plots below show the boundary of SVM 1 and SVM 2 for GDP growth and exchange rate. The SVM uses five predictors but a plot can only show two, so the other three are fixed at typical values (median relative income, no visa and near market). Crosses are support vectors, circles the other rows and the colour of the area is the predicted class.
 
 ```{r svm-regions, fig.height = 5, fig.show = "hold", out.width = "50%"}
@@ -760,7 +760,7 @@ plot(svm.rad, svm.train, gdp_growth_origin ~ real_fx_index, slice = slice.typ)
 
 SVM 1 (left) draws one straight boundary, like the GLM. But the GLM's line lies higher. At an exchange-rate index of 100, for instance, the GLM predicts "decline" below about 0 % GDP growth, while SVM 1 only below about -3 %. So the GLM predicts "decline" more often, which explains its higher specificity. SVM 2 (right) predicts "decline" in separate islands, since it recognises single market-years. The wiggly boundary comes from the large gamma. The fixed values create combinations that do not exist in the data, so the plots show the shape of the boundary rather than real predictions.
 
-### Comparison with the GLM on the test set
+### Model checks: test set
 
 To compare the GLM with the SVMs on the same rows, we refit the GLM from the previous section on the SVM training set and predict the same test set. For the GLM, a fitted probability above 0.5 counts as "growth". The output below first shows the test-set accuracy of all three models, then the full confusion matrix of the final model, SVM 2. "Growth" is the positive class, so sensitivity is the share of growing rows found, and specificity is the share of declining rows found.
 
@@ -820,7 +820,7 @@ Both models catch 2020, when GDP fell in every origin country. The difference li
 
 So the SVM's advantage does not come from a better economic rule. It recognises each market-year from its unique combination of GDP growth, exchange rate and income, and learns what happened in it.
 
-### Cross-validation: GLM vs SVM
+### Cross-validation
 
 The test set above is only one split, so one (un)lucky split can favour one model. We therefore also compare the GLM, SVM 1 and SVM 2 with 10-fold cross-validation on the whole data. All three models use the same folds, so in each fold they are trained and tested on the same rows. Cost and gamma are kept from `tune()`.
 
@@ -876,8 +876,6 @@ abline(h = mean(svm.data$growth == "growth"), lty = 2)   # always "growth"
 
 Over the 10 folds, SVM 2 reaches a mean accuracy of `r round(100 * mean(acc.rad), 1)`% against `r round(100 * mean(acc.glm), 1)` % for the GLM and `r round(100 * mean(acc.lin), 1)`% for SVM 1. SVM 2 is better than the GLM in `r sum(acc.rad > acc.glm)` of 10 folds, so the ranking from the test set does not depend on the split. The GLM and the linear SVM are again almost equal, meaning the gain comes from the curved boundary, not from using an SVM. The CV accuracy of SVM 2 is slightly optimistic because cost and gamma were tuned on part of the same rows.
 
-### Predicting future years
-
 The random split tests market-years that the model has already seen in other cantons. The agency wants to know about next year, which no model has seen. As in the GAM section, we fit on 2016-2023 and predict 2024-2025.
 
 ```{r svm-time}
@@ -903,7 +901,7 @@ knitr::kable(data.frame(Accuracy = acc.t), digits = 3,
 
 For future years no model beats always guessing "growth" (`r round(100 * acc.t[1])`%). SVM 1 gives exactly the same accuracy because it predicts "growth" for every row. SVM 2 is the worst (`r round(100 * acc.t["SVM 2: radial"])`%), suggesting its wiggly boundary learned the past market-years by heart and does not carry over to new ones. This is the same lesson as for the GAM: the flexible model describes the past best but it is not the safer model for the future.
 
-### Conclusion SVM vs GLM
+In summary:
 
 - The radial SVM classifies growth clearly better than the GLM on market-years it has seen, both on the test set and in all 10 CV folds, and it finds more of the declines.
 - For new years, neither the SVM nor the GLM predicts the direction of growth better than always guessing "growth". Whether a market grows depends mostly on what happens in a given year, such as covid, and in normal years it differs between cantons. The economic indicators move together with such shocks (GDP fell in 2020), but they do not announce them in advance, so they cannot forecast growth for a new year.
