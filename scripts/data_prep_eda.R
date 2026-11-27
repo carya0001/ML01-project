@@ -23,15 +23,24 @@ hotel <- read_csv("data/processed/swiss_hotel_panel.csv", show_col_types = FALSE
 
 # --------------------------------check data-----------------------------------
 
-dim(hotel)                 # 3120 rows = 26 cantons x 12 markets x 10 years
-str(hotel)                 # canton, origin_country, origin_group, covid_period are text
-colSums(is.na(hotel))      # arrivals, overnights, share_in_canton: 2 NA (hidden by the BFS)
-                           # avg_stay: 27 NA, growth: 4 NA
+dim(hotel)             # 3120 rows = 26 cantons x 12 markets x 10 years
+str(hotel)             # canton, origin_country, origin_group, covid_period are text
+colSums(is.na(hotel))  # arrivals: 2 NA (hidden by the BFS)
+                       # avg_stay: 27 NA, growth: 4 NA
 
 hotel |> filter(is.na(arrivals)) |> select(year, canton, origin_country)
 # Appenzell Innerrhoden, GCC and South Korea, 2022: no response, so we drop them
 
 hotel <- hotel |> filter(!is.na(arrivals))
+
+#factor text columns
+hotel <- hotel |>
+  mutate(
+    canton         = factor(canton),
+    origin_country = factor(origin_country),
+    origin_group   = factor(origin_group, levels = c("near", "far")),
+    covid_period   = factor(covid_period, levels = c("pre", "during", "post"))
+  )
 
 # ---------------------------check response: arrivals--------------------------
 
@@ -46,6 +55,45 @@ hotel <- hotel |> mutate(log_arrivals = log1p(arrivals))
 
 ggplot(hotel, aes(log_arrivals)) + geom_histogram(bins = 40)   # more symmetric
 
+# ---------------------------check response: growth----------------------------
+# binary response of GLM and SVM
+# 1 = more arrivals than the year before, 0 = fewer
+
+hotel |> filter(is.na(growth)) |> select(year, canton, origin_country)
+# Appenzell Innerrhoden, GCC and South Korea, 2023: no 2022 value to compare with
+# arrivals are valid, so these rows stay for the LM and GAM;
+# the SVM drops them (3116 rows), glm() drops them automatically
+
+growth.data <- hotel |> filter(!is.na(growth))
+
+mean(growth.data$growth)
+# about 60 % growth: classes not balanced
+
+#eda growth: share of rows with growth per year, near vs far
+growth.data |>
+  group_by(year, origin_group) |>
+  summarise(share = mean(growth), .groups = "drop") |>
+  ggplot(aes(year, share, colour = origin_group)) +
+  geom_line() +
+  geom_point() +
+  scale_colour_manual(values = group_cols) +
+  scale_x_continuous(breaks = 2016:2025) +   # whole years only
+  labs(title = "Share of rows with growth", x = NULL, y = "Share with growth",
+       colour = "Market")
+# no growth anywhere in 2020, almost all rows grew in 2022
+# before covid about 47-73%: in normal years some cantons grow, others decline
+
+#eda growth vs GDP growth of origin
+# binomial smoother, so the curve stays between 0 and 1
+ggplot(growth.data, aes(gdp_growth_origin, growth, colour = origin_group)) +
+  geom_jitter(height = 0.05, alpha = 0.2) +
+  geom_smooth(method = "gam", formula = y ~ s(x), method.args = list(family = binomial)) +
+  scale_colour_manual(values = group_cols) +
+  labs(title = "Growth vs GDP growth of origin", x = "GDP growth of origin (%)",
+       y = "growth (0 = decline, 1 = growth)", colour = "Market")
+# strong GDP drop (below about -4 % near, -1 % far): no growth,
+# above that no clear direction
+
 # ----------------------------check predictors---------------------------------
 
 #check levels
@@ -53,15 +101,6 @@ unique(hotel$origin_group)    # near, far
 unique(hotel$covid_period)    # pre, during, post
 unique(hotel$canton)          # 26 cantons
 unique(hotel$origin_country)  # 12 markets
-
-#factor text columns
-hotel <- hotel |>
-  mutate(
-    canton         = factor(canton),
-    origin_country = factor(origin_country),
-    origin_group   = factor(origin_group, levels = c("near", "far")),
-    covid_period   = factor(covid_period, levels = c("pre", "during", "post"))
-  )
 
 #check continuous predictor: beds
 summary(hotel$beds)
